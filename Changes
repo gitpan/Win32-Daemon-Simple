@@ -1,0 +1,9 @@
+Revision history for Perl extension Win32::Daemon::Simple.
+
+0.1.0  Thu Oct 31 19:28 2002 (CET)
+	- original version
+
+0.1.2  Tue Nov 5 14:46 2002 (CET)
+	- a few small tuneups
+	- changed the way param_modify handlers report invalid data
+	- added -default and -defaultPARAM options
