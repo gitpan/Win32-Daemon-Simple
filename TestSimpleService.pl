@@ -5,7 +5,7 @@ use Win32::Daemon;
 use Win32::Daemon::Simple
 	Service => 'TestSimpleService',
 	Name => 'Test Simple Service',
-	Version => '1.0',
+	Version => '2.0',
 	Info => {
 		display =>  'Test Simple Service',
 		description => 'Test Service for Win32::Daemon::Simple',
@@ -31,6 +31,7 @@ Interval : how often does the service look for new or modified files
 		tAlkative => sub {undef},
 	};
 
+LogNT("Running as ".SERVICEID);
 ServiceLoop(\&doSomething);
 Log("Going down");
 exit;

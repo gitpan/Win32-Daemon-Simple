@@ -12,8 +12,8 @@ use Exporter;
 use strict;
 use vars qw(@ISA @EXPORT $VERSION);
 @ISA = qw(Exporter);
-@EXPORT = qw(ReadParam SaveParam Log LogNT OpenLog CloseLog CatchMessages GetMessages ServiceLoop DoEvents CMDLINE);
-$VERSION = '0.2.2';
+@EXPORT = qw(ReadParam SaveParam Log LogNT OpenLog CloseLog CatchMessages GetMessages ServiceLoop DoEvents CMDLINE SERVICEID SERVICENAME);
+$VERSION = '0.2.6';
 
 sub Now () {
 	strftime( "%Y/%m/%d %H:%M:%S", localtime())
@@ -24,12 +24,13 @@ if (0) {
 	require 'Win32/Service.pm';
 }
 
-my ($svcid, $svcname, $svcversion) = ( $Script, $Script);
+my ($svcid, $origsvcid, $svcname, $svcversion) = ( $Script, $Script);
 BEGIN {
 	eval {
 		my $title;
 		if ($^C != 1 and $title = Win32::Console::_GetConsoleTitle()) {
 			eval 'sub CMDLINE () {1}';
+			$|=1;
 			if (lc($title) eq lc($^X) or lc($title) eq lc($0)) {
 				eval 'sub FROMCMDLINE () {0}';
 				eval '*MsgBox = \&Win32::MsgBox;';
@@ -52,15 +53,20 @@ my ($info, $params, $param_modify, $run_params);
 
 # parameters
 use Win32::Registry;
+
+if ($Win32::Registry::VERSION < 0.08 and !defined($Win32::Registry2::VERSION)) {
+	die "Please update your Win32::Registry to 0.08 or newer or install the patch from http://jenda.krynicky.cz/#Win32::Registry2\n\n";
+}
+
+my $ServiceKey;
 {
-	my $key;
 	my $paramkey;
 	sub ReadParam {
 		my ( $param, $default) = @_;
-		$key = $HKLM->Open('SYSTEM\CurrentControlSet\Services\\'.$svcid)
-			unless $key;
-		return $default unless $key;
-		$paramkey = $key->Create('Parameters')
+		$ServiceKey = $HKLM->Open('SYSTEM\CurrentControlSet\Services\\'.$svcid)
+			unless $ServiceKey;
+		return $default unless $ServiceKey;
+		$paramkey = $ServiceKey->Create('Parameters')
 			unless $paramkey;
 		my $value = $paramkey->GetValue($param);
 		$value = $default unless defined $value;
@@ -69,10 +75,10 @@ use Win32::Registry;
 
 	sub SaveParam {
 		my ( $param, $value) = @_;
-		$key = $HKLM->Open('SYSTEM\CurrentControlSet\Services\\'.$svcid)
-			unless $key;
-		return unless $key; # do not save anything if the service is not installed
-		$paramkey = $key->Create('Parameters')
+		$ServiceKey = $HKLM->Open('SYSTEM\CurrentControlSet\Services\\'.$svcid)
+			unless $ServiceKey;
+		return unless $ServiceKey; # do not save anything if the service is not installed
+		$paramkey = $ServiceKey->Create('Parameters')
 			unless $paramkey;
 		die "Can't open/create the Parameters subkey in the service settings!\n" unless $paramkey; # do not save anything if the service is not installed
 		if (!defined $value) {
@@ -147,6 +153,7 @@ sub import {
 			$key = lc $key;
 			if ($key eq 'service') {
 				$svcid = $val;
+				$origsvcid = $val;
 			} elsif ($key eq 'name') {
 				$svcname = $val;
 			} elsif ($key eq 'version') {
@@ -202,7 +209,7 @@ sub import {
 			$re = qr{^[-/]($re)(?:=(.*))?$}si;
 
 			while (my $opt = shift(@ARGV)){
-				if ($opt =~ m{^[-/]install}i) {
+				if ($opt =~ m{^[-/]install$}i) {
 					$info->{'name'} = $svcid;
 					$info->{'display'} = $svcname unless defined $info->{'display'};
 					if (! exists $info->{'path'}) {
@@ -211,6 +218,7 @@ sub import {
 						} else {
 							$info->{'path'} =  $^X;
 							if (defined $info->{'parameters'}) {
+								$info->{'parameters'} .= ' --' unless $info->{'parameters'} =~ /--$/;
 								$info->{'parameters'} = "$Bin\\$Script $info->{'parameters'}";
 							} else {
 								$info->{'parameters'} = "$Bin\\$Script";
@@ -235,7 +243,7 @@ sub import {
 						MsgBox "Failed to install: " . Win32::FormatMessage( Win32::Daemon::GetLastError() ) . "\n", MB_ICONERROR, $svcname;
 					}
 					$inst = 1;
-				} elsif ($opt =~ m{^[-/]uninstall}i) {
+				} elsif ($opt =~ m{^[-/]uninstall$}i) {
 					if( Win32::Daemon::DeleteService($svcid) ) {
 						print "    Uninstalled successfully\n";
 						MsgBox "Uninstalled successfully\n", MB_ICONINFORMATION, $svcname;
@@ -244,10 +252,43 @@ sub import {
 						MsgBox "Failed to uninstall: " . Win32::FormatMessage( Win32::Daemon::GetLastError() ) . "\n", MB_ICONERROR, $svcname;
 					}
 					$inst = 1;
-				} elsif ($opt =~ m{^[-/]start}i) {
+
+# service settings
+				} elsif ($opt =~ m{^[-/]service=(.*)$}i) {
+					$svcid = $1;
+					$info->{'name'} = $svcid;
+					if ($info->{'parameters'}) {
+						$info->{'parameters'} =~ s{[/-]service=\S+}{};
+						$info->{'parameters'} = "/service=$svcid $info->{'parameters'}";
+					} else {
+						$info->{'parameters'} = "/service=$svcid --";
+					}
+				} elsif ($opt =~ m{^[-/]service:name=(.*)$}i) {
+					$svcname = $1;
+					$info->{'display'} = $svcname;
+					if ($info->{'parameters'}) {
+#						$info->{'parameters'} =~ s{[/-]service:name=\S+}{}; # what to do with quotes?
+						$info->{'parameters'} = qq{"/service:name=$svcname" $info->{'parameters'}};
+					} else {
+						$info->{'parameters'} = qq{"/service:name=$svcname" --};
+					}
+					if (!$run_with_params) {
+						$ServiceKey = $HKLM->Open('SYSTEM\CurrentControlSet\Services\\'.$svcid)
+							unless $ServiceKey;
+						$ServiceKey->SetValues('DisplayName', REG_SZ, $svcname)
+							if $ServiceKey;
+					}
+				} elsif ($opt =~ m{^[-/]service:user=(.*)$}i) {
+					$info->{'user'} = $1;
+				} elsif ($opt =~ m{^[-/]service:pwd=(.*)$}i) {
+					$info->{'pwd'} = $1;
+				} elsif ($opt =~ m{^[-/]service:interactive=(.*)$}i) {
+					$info->{'interactive'} = (($1 && lc($1) ne 'no') ? 1 : 0);
+
+				} elsif ($opt =~ m{^[-/]start$}i) {
 					StopStartService('start');
 					$inst = 1;
-				} elsif ($opt =~ m{^[-/]stop}i) {
+				} elsif ($opt =~ m{^[-/]stop$}i) {
 					StopStartService('stop');
 					$inst = 1;
 				} elsif ($opt =~ m{^[-/](?:help(?:_and_settings)?|\?)$}i) {
@@ -331,7 +372,7 @@ or press ENTER to exit
 										print "    $param: $value\n";
 									};
 									if ($@) {
-										print "    $param: $@\n";
+										print "    $param: $run_params->{$param}\n\t$@\n";
 									}
 								} else {
 									SaveParam( $param, $value);
@@ -355,6 +396,7 @@ or press ENTER to exit
 							print "    $param: $val\n";
 						}
 					}
+					print( $origsvcid ne $svcid ? "NOT INSTALLED as $svcid!\n" : "NOT INSTALLED!\n") unless $ServiceKey;
 					if (! FROMCMDLINE) {
 						print "(press ENTER to exit)\n";
 						<STDIN>;
@@ -373,7 +415,7 @@ or press ENTER to exit
 							}
 						};
 						if ($@) {
-							print "    $opt: $@\n";
+							print "    $opt: ".ReadParam( $opt, $params->{$opt})."\n\t$@\n";
 						}
 					} else {
 						$run_params->{$opt} = $val;
@@ -491,6 +533,8 @@ or press ENTER to exit
 					}
 					push @EXPORT, $sub;
 				}
+				eval "sub SERVICEID () {q\\$svcid\\}";
+				eval "sub SERVICENAME () {q\\$svcname\\}";
 			}
 			LogNT('Running');
 			CloseLog();
@@ -502,6 +546,8 @@ or press ENTER to exit
 				eval "sub $sub () {}";
 				push @EXPORT, $sub;
 			}
+			eval "sub SERVICEID () {q\\$svcid\\}";
+			eval "sub SERVICENAME () {q\\$svcname\\}";
 		}
 	};
 	if ($@) {
@@ -570,6 +616,7 @@ sub ServiceLoop {
 			}
 
 			if (--$cnt == 0) {
+				print "       \r" if CMDLINE;
 				$cnt = int(INTERVAL * 60);
 				eval {$process->()};
 				if ($@) {
@@ -581,6 +628,7 @@ sub ServiceLoop {
 				LogNT('tick: '.Now()) ;
 				$tick_cnt = 60;
 			}
+			print "\r$cnt      \r" if CMDLINE;
 			sleep 1;
 			# /RUNNING
 		} elsif ($state == SERVICE_PAUSE_PENDING) {
@@ -627,7 +675,7 @@ sub DoEvents { # (\&PauseProc, \&UnpauseProc, \&StopProc)
 	if ($state == SERVICE_RUNNING or $state == 0x0080) {
 		# RUNNING
 		if ($state == 0x0080) {
-			SetState(SERVICE_RUNNING);
+			Win32::Daemon::SetState(SERVICE_RUNNING);
 		}
 
 		# Check for any outstanding commands. Pass in a non zero value
@@ -643,8 +691,8 @@ sub DoEvents { # (\&PauseProc, \&UnpauseProc, \&StopProc)
 				# and stop.
 				# Tell the SCM that we are preparing to shutdown and that we expect
 				# it to take 25 seconds (so don't terminate us for at least 25 seconds)...
+				Log("Asked to stop (The server's going down!)");
 				Win32::Daemon::State( SERVICE_STOP_PENDING, 25000 );
-				Log("Asked to stop");
 				DoHandler( $_[2], sub {Win32::Daemon::StopService();Log("Going down");exit;});
 			} else {
 				# Got an unhandled control message. Set the state to
@@ -691,7 +739,7 @@ sub Pause {
 		} else {
 			# unpausing
 			Log("Continue");
-			$_[0]->() if (defined $_[1] and ref $_[1] eq 'CODE');
+			$_[0]->() if (defined $_[0] and ref $_[0] eq 'CODE');
 			SetState(SERVICE_RUNNING);
 			return SERVICE_RUNNING
 		}
@@ -708,7 +756,7 @@ $logging_code = <<'-END--';
 	my $messages = '';
 	my $LOG = new FileHandle;
 	sub LogStart {
-		$logfile = ReadParam('LogFile', $params->{'LogFile'})
+		$logfile = $run_params->{'logfile'} || ReadParam('LogFile', $params->{'LogFile'})
 			unless $logfile;
 		open $LOG, ">> $logfile";
 		print $LOG @_, " at ", Now(),"\n";
@@ -783,7 +831,7 @@ __END__
 
 Win32::Daemon::Simple - framework for Windows services
 
-0.2.2
+0.2.5
 
 =head1 SYNOPSIS
 
@@ -903,6 +951,8 @@ The description displayed alongside the display name in the Service Manager.
 =head4 pwd
 
 The username and password that the service will be running under.
+The accont must have the SeServiceLogonRight right. You can change user rights
+using Win32::Lanman::GrantPrivilegeToAccount() or the User Manager.
 
 =head4 interactive
 
@@ -977,9 +1027,14 @@ otherwise return the value you want to be stored in the registry and used by the
 				my $interval = 0+$_[0];
 				die "The interval must be a positive number!\n"
 					unless $interval > 0;
-					return $interval
-				},
+				return $interval;
+			},
 			Tick => sub {return ($_[0] ? 1 : 0)},
+			SMTP => sub {
+				my $smtp = shift;
+				return $smtp if Mail::Sender::TestServer($smtp);
+				# assuming you have Mail::Sender 0.8.07 or newer
+			},
 		},
 
 =head3 Logging_code
@@ -1126,7 +1181,8 @@ The parameters passed to a script using this module will be processed by the mod
 If you want to pass some paramters to the script itself use -- as a parameter.
 If you do then the parameters before the -- will be processed by the module and the ones behind
 will be passed to the script. If you do not use the -- but do call the program with some parameters
-then the parameters will be processed and your program will end!
+then the parameters will be processed by Win32::Daemon::Simple and your program will end!
+You may use either -param or /param. This makes no difference.
 
 The service created using this module will accept the following commandline parameters:
 
@@ -1190,6 +1246,51 @@ and the error message will be printed to the screen.
 
 Deletes the parameter from registry, therefore the default value of that parameter
 will be used each time the service starts.
+
+=head3 -service=name
+
+Let's you overwrite the service ID specified in the
+
+	use Win32::Daemon::Simple
+		Service => 'TestSimpleService',
+
+If you use this BEFORE -install, the service will be installed into
+HKLM\SYSTEM\CurrentControlSet\Services\[$name]
+
+This allows you to install several instances of a service, each under a different name.
+Each instance will remember its name which you can access as C<SERVICEID>.
+
+If you want to change the parameters of one of the instances use
+
+	service.pl -service=name -tick -logfile=name.log
+
+without the -service parameter you are chaning the default service.
+
+=head3 -service:name=name
+
+Let's you overwrite the service display name and the name written to the log file.
+That is both
+
+	use Win32::Daemon::Simple
+		...
+		Name => 'Long Service Name',
+		...
+		Info => {
+			display =>  'Display Service Name',
+
+You may get the name as C<SERVICENAME>.
+
+=head3 -service:user=.\localusername
+
+=head3 -service:pwd=password
+
+You can specify what user account to use for the service. These parameters are ONLY effective
+if followed by C<-install> !
+
+=head3 -service:interactive=0/1
+
+Let's you specify whether the service is allowed to interact with the desktop.
+This parameter is ONLY effective if followed by C<-install> and if you do not specify the C<user> and C<pwd>!
 
 =head3 --
 

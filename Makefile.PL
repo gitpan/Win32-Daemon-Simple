@@ -7,6 +7,7 @@ WriteMakefile(
     'PREREQ_PM'		=> {
 		Win32::Daemon => 0,
 		Win32::Console => 0,
+		Hash::Case => 0,
 	}, # e.g., Module::Name => 1.1
     ($] >= 5.005 ?    ## Add these new keywords supported since 5.005
       (ABSTRACT_FROM => 'Simple.pm', # retrieve abstract from module

@@ -1,4 +1,4 @@
-Win32/Daemon/Simple version 0.1.0
+Win32/Daemon/Simple version 0.2.6
 ================================
 
 Simple framework for Windows services
@@ -52,6 +52,10 @@ This module requires these other modules and libraries:
 
   Win32::Daemon
   Win32::Console
+  Win32::Registry
+    - you need either version 0.08 or the patch from
+	   http://jenda.krynicky.cz/#Win32::Registry2
+	   or http://www24.brinkster.com/jenda/index.html#Win32::Registry2
 
 COPYRIGHT AND LICENCE
 
