@@ -11,7 +11,7 @@ use strict;
 use vars qw(@ISA @EXPORT $VERSION);
 @ISA = qw(Exporter);
 @EXPORT = qw(ReadParam SaveParam Log LogNT OpenLog CloseLog CatchMessages GetMessages ServiceLoop DoEvents CMDLINE);
-$VERSION = '0.1.2';
+$VERSION = '0.1.3';
 
 my ($svcid, $svcname, $svcversion) = ( $Script, $Script);
 BEGIN {
@@ -393,7 +393,10 @@ sub ServiceLoop {
 					LogNT;
 				}
 			}
-			Log('tick') if TICK and (--$tick_cnt == 0);
+			if (TICK and (--$tick_cnt == 0)) {
+				Log('tick') ;
+				$tick_cnt = 60;
+			}
 			sleep 1;
 			# /RUNNING
 		} elsif ($state == SERVICE_PAUSE_PENDING) {
